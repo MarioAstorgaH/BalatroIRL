@@ -1,9 +1,0 @@
-services:
-  app:
-    image: marioastorgah/mediapipe-env:Vision
-    build: 
-      context: .
-    volumes:
-      - .:/app  # Mapea la carpeta actual del host (el .) a /app del contenedor
-    command: tail -f /dev/null # Comando de inicio
-  
