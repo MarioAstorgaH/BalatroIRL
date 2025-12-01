@@ -3,6 +3,7 @@ import mediapipe as mp
 import numpy as np
 import pickle
 import os
+from typing import Optional, Tuple
 
 # --- INICIALIZACIÓN Y CONFIGURACIÓN ---
 mp_hands = mp.solutions.hands
@@ -84,7 +85,39 @@ def extract_normalized_pose_stable(hand_landmarks):
 def compare_poses(pose1, pose2):
     """Calcula la diferencia (distancia euclidiana) entre dos poses."""
     return np.linalg.norm(pose1 - pose2)
+def get_pose_state(current_pose: Optional[np.ndarray],
+                   pose_open: Optional[np.ndarray],
+                   pose_closed: Optional[np.ndarray],
+                   threshold: float = THRESHOLD) -> Tuple[bool, bool, Optional[float], Optional[float]]:
+    """
+    Devuelve el estado de la pose actual comparada con las poses guardadas.
 
+    Returns: (is_open, is_closed, dist_open, dist_closed)
+    - `is_open` será True si la pose abierta es la más cercana y está por debajo del umbral.
+    - `is_closed` será True si la pose cerrada es la más cercana y está por debajo del umbral.
+    - `dist_open` y `dist_closed` son las distancias calculadas (o None si falta la pose guardada).
+    """
+    if current_pose is None:
+        return False, False, None, None
+
+    dist_open: Optional[float] = None
+    dist_closed: Optional[float] = None
+
+    if pose_open is not None:
+        dist_open = float(compare_poses(pose_open, current_pose))
+    if pose_closed is not None:
+        dist_closed = float(compare_poses(pose_closed, current_pose))
+
+    is_open = False
+    is_closed = False
+
+    # Determinar cuál es la más cercana (si existen ambas) y si están por debajo del umbral
+    if dist_open is not None and (dist_closed is None or dist_open < dist_closed) and dist_open < threshold:
+        is_open = True
+    if dist_closed is not None and (dist_open is None or dist_closed < dist_open) and dist_closed < threshold:
+        is_closed = True
+
+    return is_open, is_closed, dist_open, dist_closed
 
 # --- BUCLE PRINCIPAL ---
 while cap.isOpened():
@@ -113,21 +146,21 @@ while cap.isOpened():
                 continue
 
             # --- Lógica de COMPARACIÓN ---
-            
+
             # Verificar si ambas poses están guardadas
             if saved_pose_open is not None and saved_pose_closed is not None:
-                dist_open = compare_poses(saved_pose_open, current_pose)
-                dist_closed = compare_poses(saved_pose_closed, current_pose)
-                
-                # Se clasifica como la pose a la que tenga menor distancia
-                if dist_open < dist_closed and dist_open < THRESHOLD:
+                is_open, is_closed, dist_open, dist_closed = get_pose_state(current_pose, saved_pose_open, saved_pose_closed, THRESHOLD)
+
+                if is_open:
                     display_text = f"GESTO: MANO ABIERTA (Dist: {dist_open:.3f})"
                     color = (0, 255, 0) # Verde
-                elif dist_closed < dist_open and dist_closed < THRESHOLD:
+                elif is_closed:
                     display_text = f"GESTO: MANO CERRADA (Dist: {dist_closed:.3f})"
                     color = (255, 0, 0) # Rojo
                 else:
-                    display_text = f"Pose no reconocida (Dif. Abierta: {dist_open:.3f}, Cerrada: {dist_closed:.3f})"
+                    d_open = dist_open if dist_open is not None else float('nan')
+                    d_closed = dist_closed if dist_closed is not None else float('nan')
+                    display_text = f"Pose no reconocida (Dif. Abierta: {d_open:.3f}, Cerrada: {d_closed:.3f})"
                     color = (255, 255, 0) # Amarillo
             
             # Mensaje de configuración si faltan poses
