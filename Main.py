@@ -5,6 +5,13 @@ import pickle
 import os
 from typing import Optional, Tuple
 
+# Intentar importar pyserial; si no está instalado, la comunicación serial se deshabilita
+try:
+    import serial
+except Exception:
+    serial = None
+    print("pyserial no instalado. Comunicación serial deshabilitada. Instalar con: pip install pyserial")
+
 # --- INICIALIZACIÓN Y CONFIGURACIÓN ---
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(min_detection_confidence=0.5, min_tracking_confidence=0.5)
@@ -22,6 +29,14 @@ saved_pose_closed = None
 # Umbral de similitud global (ajustar si es necesario)
 THRESHOLD = 0.8
 
+# Configuración serial (ajusta `SERIAL_PORT` a tu COM en Windows)
+SERIAL_PORT = 'COM3'
+BAUD_RATE = 115200
+esp_serial = None
+
+# Estado previo de la pose (None | 'open' | 'closed') para evitar logs repetidos
+prev_state = None
+
 # --- Cargar Poses Guardadas ---
 
 def load_pose(file_path):
@@ -33,6 +48,32 @@ def load_pose(file_path):
 
 saved_pose_open = load_pose(POSE_OPEN_FILE)
 saved_pose_closed = load_pose(POSE_CLOSED_FILE)
+    
+# Inicializar el puerto serial (si pyserial está disponible)
+def init_serial(port: str = SERIAL_PORT, baud: int = BAUD_RATE):
+    global esp_serial
+    if serial is None:
+        return
+    try:
+        esp_serial = serial.Serial(port, baud, timeout=1)
+        print(f"Serial inicializado en {port}@{baud}")
+    except Exception as e:
+        print(f"No se pudo abrir puerto serial {port}: {e}")
+        esp_serial = None
+
+# Enviar un mensaje de log al ESP32 por serial (añade '\\n')
+def send_serial_log(message: str):
+    if serial is None or esp_serial is None:
+        return
+    try:
+        if not message.endswith('\n'):
+            message = message + '\n'
+        esp_serial.write(message.encode('utf-8'))
+    except Exception as e:
+        print(f"Error enviando por serial: {e}")
+
+# Intentar abrir el puerto ahora (si el usuario quiere cambiar el puerto, editar la constante arriba)
+init_serial()
 
 # --- Cargar Poses Guardadas ---
 def load_pose(file_path):
@@ -154,14 +195,23 @@ while cap.isOpened():
                 if is_open:
                     display_text = f"GESTO: MANO ABIERTA (Dist: {dist_open:.3f})"
                     color = (0, 255, 0) # Verde
+                    # Enviar log por serial sólo si cambia el estado
+                    if prev_state != 'open':
+                        send_serial_log('OPEN')
+                        prev_state = 'open'
                 elif is_closed:
                     display_text = f"GESTO: MANO CERRADA (Dist: {dist_closed:.3f})"
                     color = (255, 0, 0) # Rojo
+                    if prev_state != 'closed':
+                        send_serial_log('CLOSED')
+                        prev_state = 'closed'
                 else:
                     d_open = dist_open if dist_open is not None else float('nan')
                     d_closed = dist_closed if dist_closed is not None else float('nan')
                     display_text = f"Pose no reconocida (Dif. Abierta: {d_open:.3f}, Cerrada: {d_closed:.3f})"
                     color = (255, 255, 0) # Amarillo
+                    # reset state so next recognition will re-send
+                    prev_state = None
             
             # Mensaje de configuración si faltan poses
             elif saved_pose_open is None:
@@ -208,3 +258,10 @@ while cap.isOpened():
 # Cierre
 cap.release()
 cv2.destroyAllWindows()
+# Cerrar serial si está abierto
+try:
+    if esp_serial is not None:
+        esp_serial.close()
+        print("Serial cerrado.")
+except Exception:
+    pass
